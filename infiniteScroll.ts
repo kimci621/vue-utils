@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 interface UseInfiniteScrollOptions<T> {
   /**
@@ -26,6 +26,12 @@ interface UseInfiniteScrollOptions<T> {
    * @default true
    */
   loadOnMount?: boolean
+
+  /**
+   * If the maximum number of pages to load is specified, it will stop loading once this many pages are reached.
+   * @default undefined
+   */
+  maxPage?: number
 }
 
 /**
@@ -42,6 +48,7 @@ export function useAsyncLoadInfiniteScroll<T>(
     threshold = 200,
     initialPage = 1,
     loadOnMount = true,
+    maxPage,
   } = options
 
   // State
@@ -56,11 +63,31 @@ export function useAsyncLoadInfiniteScroll<T>(
     if (!targetRef.value || isLoading.value || !hasMore.value)
       return
 
+    // Check if we've reached maxPage
+    if (maxPage !== undefined && currentPage.value > maxPage) {
+      hasMore.value = false
+      return
+    }
+
     const element = targetRef.value
     const { scrollTop, scrollHeight, clientHeight } = element
 
     // If we're close to the bottom, load more
     if (scrollHeight - scrollTop - clientHeight < threshold) {
+      loadMore()
+    }
+  }
+
+  // Function to check if content fills the viewport and load more if needed
+  const checkIfNeedsMoreContent = () => {
+    if (!targetRef.value || isLoading.value || !hasMore.value)
+      return
+
+    const element = targetRef.value
+    const { scrollHeight, clientHeight } = element
+
+    // If the content doesn't fill the viewport, load more
+    if (scrollHeight <= clientHeight) {
       loadMore()
     }
   }
@@ -95,6 +122,12 @@ export function useAsyncLoadInfiniteScroll<T>(
     if (isLoading.value || !hasMore.value)
       return
 
+    // Check if we've reached maxPage
+    if (maxPage !== undefined && currentPage.value > maxPage) {
+      hasMore.value = false
+      return
+    }
+
     try {
       isLoading.value = true
       error.value = null
@@ -107,6 +140,11 @@ export function useAsyncLoadInfiniteScroll<T>(
       else {
         items.value = [...items.value, ...newItems]
         currentPage.value++
+
+        // After loading more items, check if we need to load even more
+        nextTick(() => {
+          checkIfNeedsMoreContent()
+        })
       }
     }
     catch (err) {
@@ -174,6 +212,11 @@ export function useAsyncLoadInfiniteScroll<T>(
         // We reached the target page, assume there might be more
         hasMore.value = true
       }
+
+      // Check if we need more content after refetching
+      nextTick(() => {
+        checkIfNeedsMoreContent()
+      })
     }
     catch (err) {
       error.value = err instanceof Error ? err : new Error('An error occurred while refetching items')
@@ -192,6 +235,10 @@ export function useAsyncLoadInfiniteScroll<T>(
 
     if (newTarget) {
       newTarget.addEventListener('scroll', throttledCheckScroll)
+      // Check if we need more content when target element changes
+      nextTick(() => {
+        checkIfNeedsMoreContent()
+      })
     }
   })
 
@@ -201,7 +248,12 @@ export function useAsyncLoadInfiniteScroll<T>(
       targetRef.value.addEventListener('scroll', throttledCheckScroll)
 
       if (loadOnMount) {
-        loadMore()
+        loadMore().then(() => {
+          // After initial load, check if we need to load more to fill the viewport
+          nextTick(() => {
+            checkIfNeedsMoreContent()
+          })
+        })
       }
     }
   })
